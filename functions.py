@@ -192,9 +192,49 @@ def combinaisons(liste_var,nb_elt):
     liste_combinaisons = [c for c in list(combinaisons)]
     return liste_combinaisons
 
+### Tests de outlier
 
-       
+def is_outlier(var):
+    q1 = np.quantile(var, 0.25)
+    q3 = np.quantile(var, 0.75)    
+    IQR = q3 - q1
     
+    lower_bound = q1 - 1.5 * IQR
+    upper_bound = q3 + 1.5 * IQR
+
+    # Retourne un tableau de booléens, chaque au moins un élément est True si c'est un outlier
+    return any((var < lower_bound) | (var > upper_bound))
+
+
+def list_columns_with_outliers(df, columns):
+    outlier_columns = []
+    
+    for column in columns:
+        if column in df.columns:
+            # Convertir la colonne en tableau NumPy
+            var = df[column].values
+            
+            # Vérifier s'il y a des outliers
+            if is_outlier(var):
+                outlier_columns.append(column)
+    
+    return outlier_columns
+
+from scipy.stats.mstats import winsorize
+def winsorization(df, columns, limits=(0.05, 0.05)):
+    df_winsorized = df[columns].copy()  # Crée une copie du DataFrame pour éviter de modifier l'original
+    
+    for column in columns:
+        if column in df_winsorized.columns:
+            # Convertir la colonne en tableau NumPy
+            var = df_winsorized[column].values
+            
+            # Vérifier s'il y a des outliers
+            if is_outlier(var):
+                # Appliquer la winsorisation
+                df_winsorized[column] = winsorize(var, limits=limits)
+    
+    return df_winsorized
 
 
 
@@ -203,15 +243,74 @@ def combinaisons(liste_var,nb_elt):
 
 
 
+import pandas as pd
+import numpy as np
+from sklearn.metrics import mutual_info_score
+from scipy.stats import chi2_contingency
+
+def discretize_variable(df, var_continuous, cible, n_classes=5):
+    # 1. Découper en N classes
+    df['class_bins'] = pd.qcut(df[var_continuous], q=n_classes, duplicates='drop')
+
+    # 2. Calcul du taux de risque pour chaque classe
+    risk_rates = df.groupby('class_bins')[cible].mean()
+
+    # 3. Regrouper les classes selon les critères
+    grouped_classes = []
+    cumulative_weight = 0
+    group = []
+
+    for i, (interval, risk) in enumerate(risk_rates.items()):
+        group.append(interval)
+        cumulative_weight += df[df['class_bins'] == interval].shape[0] / df.shape[0]
+
+        # Regrouper les classes pour que chaque groupe contienne au moins 5% de la population
+        if cumulative_weight >= 0.05 or i == len(risk_rates) - 1:
+            grouped_classes.append(group)
+            group = []
+            cumulative_weight = 0
+
+    # 4. Retenir les transformations avec un écart de risque d'au moins 30%
+    final_groups = []
+    for group in grouped_classes:
+        if len(group) > 1:
+            group_risks = risk_rates[group]
+            relative_risk_diff = np.abs(group_risks.max() - group_risks.min()) / group_risks.mean()
+
+            if relative_risk_diff >= 0.3:
+                final_groups.append(group)
+
+    # 5. Vérifier les stabilités en volume et en risque (simulé ici, car dépend des données)
+    stable_groups = []
+    for group in final_groups:
+        if len(group) > 1:
+            stable_groups.append(group)
+
+    # 6. Calculer les indicateurs statistiques T de Tschuprow et V de Cramer
+    def tschuprow_t(x, y):
+        contingency = pd.crosstab(x, y)
+        chi2, _, _, _ = chi2_contingency(contingency)
+        n = contingency.sum().sum()
+        return np.sqrt(chi2 / (n * min(contingency.shape)))
+
+    def cramers_v(x, y):
+        contingency = pd.crosstab(x, y)
+        chi2, _, _, _ = chi2_contingency(contingency)
+        n = contingency.sum().sum()
+        return np.sqrt(chi2 / (n * min(contingency.shape)))
+
+    tschuprow_t_values = []
+    cramers_v_values = []
+
+    for group in stable_groups:
+        df['grouped_bins'] = pd.cut(df[var_continuous], bins=np.array([g.left for g in group] + [group[-1].right]), include_lowest=True)
+        tschuprow_t_values.append(tschuprow_t(df['grouped_bins'], df[cible]))
+        cramers_v_values.append(cramers_v(df['grouped_bins'], df[cible]))
+
+    return stable_groups, tschuprow_t_values, cramers_v_values
 
 
-
-
-
-
-
-
-
+#def processing(X_test,cat_columns,
 
 
     
